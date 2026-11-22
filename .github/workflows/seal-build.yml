@@ -1,0 +1,59 @@
+name: seal-build
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Compile package
+        env:
+          GO111MODULE: 'off'
+        run: go build -v .
+      - name: Pack module zip
+        run: |
+          set -euo pipefail
+          SRC="$RUNNER_TEMP/modsrc"
+          PACKER="$RUNNER_TEMP/packer"
+          OUT="$GITHUB_WORKSPACE/dist"
+          mkdir -p "$SRC" "$PACKER" "$OUT"
+          rsync -a --exclude .git ./ "$SRC/"
+          rm -f "$SRC/.github/workflows/seal-build.yml"
+          find "$SRC/.github" -depth -type d -empty -delete
+          cat > "$PACKER/main.go" <<'GO'
+          package main
+
+          import (
+          	"os"
+
+          	"golang.org/x/mod/module"
+          	"golang.org/x/mod/zip"
+          )
+
+          func main() {
+          	f, err := os.Create(os.Args[3])
+          	if err != nil {
+          		panic(err)
+          	}
+          	defer f.Close()
+          	if err := zip.CreateFromDir(f, module.Version{Path: os.Args[1], Version: os.Args[2]}, os.Args[4]); err != nil {
+          		panic(err)
+          	}
+          }
+          GO
+          cd "$PACKER"
+          go mod init packer
+          go get golang.org/x/mod@v0.14.0
+          go run . github.com/Masterminds/goutils v1.1.0 "$OUT/v1.1.0.zip" "$SRC"
+          unzip -l "$OUT/v1.1.0.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-module-zip
+          path: dist/v1.1.0.zip
+          if-no-files-found: error
